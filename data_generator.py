@@ -172,6 +172,233 @@ def classifier(all_relation_path, variable_number, original_data_path, t_relatio
     
     return variable_objects, list(relation.keys()), relation, arity_relation, target_arity
 
+
+def classifier_with_separate_files(facts_path, train_path, variable_number, original_data_path, t_relation=''):
+    '''
+    Get information about relations from two separate files:
+    - facts_path: Background knowledge (facts.pl) - predicates used for rule body generation
+    - train_path: Target edges (train.pl) - facts to learn definitions for, not used in rule inference
+    
+    Only predicates from facts.pl are included in the domain for rule bodies.
+    Train.pl facts are not included in background when computing rule inference.
+    '''
+    # First, load background knowledge from facts.pl
+    background_relation = {}
+    background_arity_relation = {}
+    background_all_predicate = []
+    all_object = {}
+    pro = {}
+    
+    logging.info(f"Loading background knowledge from: {facts_path}")
+    with open(facts_path, 'r') as f:
+        new_single_line = f.readline()
+        while new_single_line:
+            one_perd = []
+            # Skip empty lines
+            if not new_single_line.strip():
+                new_single_line = f.readline()
+                continue
+            # Skip TEST lines
+            if '#' in new_single_line and 'TEST' in new_single_line:
+                new_single_line = f.readline()
+                continue
+            
+            # Parse predicate
+            try:
+                predicate = new_single_line[0:new_single_line.index(')')]
+            except ValueError:
+                new_single_line = f.readline()
+                continue
+                
+            # Handle probability
+            if '#' in new_single_line:
+                if 'T.#' in new_single_line or 'T#' in new_single_line:
+                    probability = 1
+                else:
+                    probability = new_single_line[new_single_line.index('.'):new_single_line.index('#')].replace('.','').replace(' ','').replace('#','')
+                    probability = '0.'+probability
+                    probability = float(probability)
+            else:
+                probability = 1
+            
+            single_line = predicate.split('(')
+            relation_name = single_line[0]
+            the_rest = single_line[1].split(",")
+            first_obj = the_rest[0]
+            second_obj = the_rest[1]
+            
+            one_perd.append(relation_name)
+            one_perd.append(first_obj)
+            one_perd.append(second_obj)
+            one_perd.append(probability)
+            background_all_predicate.append(one_perd)
+            
+            if first_obj not in all_object:
+                all_object[first_obj] = set([])
+            if second_obj not in all_object:
+                all_object[second_obj] = set([])
+            if relation_name not in background_relation:
+                background_relation[relation_name] = []
+            background_arity_relation[relation_name] = 1
+            new_single_line = f.readline()
+            pro[predicate+')'] = probability
+        f.close()
+    
+    logging.info(f"Loaded {len(background_all_predicate)} background facts with {len(background_relation)} predicates")
+    
+    # Now load target edges from train.pl
+    target_all_predicate = []
+    target_relation_facts = {}
+    
+    logging.info(f"Loading target edges from: {train_path}")
+    with open(train_path, 'r') as f:
+        new_single_line = f.readline()
+        while new_single_line:
+            one_perd = []
+            # Skip empty lines
+            if not new_single_line.strip():
+                new_single_line = f.readline()
+                continue
+            # Skip TEST lines
+            if '#' in new_single_line and 'TEST' in new_single_line:
+                new_single_line = f.readline()
+                continue
+            
+            # Parse predicate
+            try:
+                predicate = new_single_line[0:new_single_line.index(')')]
+            except ValueError:
+                new_single_line = f.readline()
+                continue
+            
+            # Handle probability
+            if '#' in new_single_line:
+                if 'T.#' in new_single_line or 'T#' in new_single_line:
+                    probability = 1
+                else:
+                    probability = new_single_line[new_single_line.index('.'):new_single_line.index('#')].replace('.','').replace(' ','').replace('#','')
+                    probability = '0.'+probability
+                    probability = float(probability)
+            else:
+                probability = 1
+            
+            single_line = predicate.split('(')
+            relation_name = single_line[0]
+            the_rest = single_line[1].split(",")
+            first_obj = the_rest[0]
+            second_obj = the_rest[1]
+            
+            one_perd.append(relation_name)
+            one_perd.append(first_obj)
+            one_perd.append(second_obj)
+            one_perd.append(probability)
+            target_all_predicate.append(one_perd)
+            
+            # Add objects from train.pl to all_object
+            if first_obj not in all_object:
+                all_object[first_obj] = set([])
+            if second_obj not in all_object:
+                all_object[second_obj] = set([])
+            
+            # Store target relation facts separately
+            if relation_name not in target_relation_facts:
+                target_relation_facts[relation_name] = []
+            
+            new_single_line = f.readline()
+            pro[predicate+')'] = probability
+        f.close()
+    
+    logging.info(f"Loaded {len(target_all_predicate)} target facts")
+    
+    # Build the relation list from ONLY background predicates (facts.pl)
+    all_relation_list = list(background_relation.keys())
+    save_all_relation = {}
+    for i in all_relation_list:
+        save_all_relation[i] = i
+    
+    with open(original_data_path+'/all_relation_dic.dt','wb') as f:
+        pickle.dump(save_all_relation,f)
+        f.close()
+    with open(original_data_path+'/all_relation_dic.txt','w') as f:
+        print(str(save_all_relation),file = f)
+        f.close()
+    
+    # Process background predicates
+    for pred in background_all_predicate:
+        first_string = str(all_relation_list.index(pred[0])) + '-1'
+        second_string = str(all_relation_list.index(pred[0])) + '-2'
+        all_object[pred[1]].add(first_string)
+        all_object[pred[2]].add(second_string)
+    
+    # Build relation tuples from background predicates
+    for pred in background_all_predicate:
+        one_tuple = []
+        one_tuple.append(pred[1])
+        one_tuple.append(pred[2])
+        one_tuple = tuple(one_tuple)
+        background_relation[pred[0]].append(one_tuple)
+        
+        # Check arity
+        if pred[1] != pred[2] and background_arity_relation[pred[0]] == 1:
+            background_arity_relation[pred[0]] = 2
+    
+    # Make variable-object dictionary
+    variable_objects = {}
+    for i in range(variable_number):
+        variable_objects[i] = set([])
+    
+    # Get target arity - first check train.pl, then background
+    target_arity = None
+    if t_relation in target_relation_facts:
+        # Infer arity from target facts
+        target_arity = 2  # Default
+        for pred in target_all_predicate:
+            if pred[0] == t_relation:
+                if pred[1] == pred[2]:
+                    target_arity = 1
+                else:
+                    target_arity = 2
+                    break
+    elif t_relation in background_arity_relation:
+        target_arity = background_arity_relation[t_relation]
+    else:
+        logging.warning(f"Target relation {t_relation} not found in either train.pl or facts.pl, assuming arity 2")
+        target_arity = 2
+    
+    # Build variable objects based on target relation from BOTH files
+    all_target_predicates = [p for p in target_all_predicate if p[0] == t_relation]
+    all_background_target_predicates = [p for p in background_all_predicate if p[0] == t_relation]
+    
+    if target_arity == 2:
+        for pred in all_target_predicates + all_background_target_predicates:
+            variable_objects[0].add(pred[1])
+            variable_objects[1].add(pred[2])
+        # Add all objects to rest of variables
+        for obj in all_object:
+            for variable_name in range(2, variable_number):
+                variable_objects[variable_name].add(obj)
+    elif target_arity == 1:
+        for obj in all_object:
+            for variable_name in range(variable_number):
+                variable_objects[variable_name].add(obj)
+    
+    # Save relation (background only, as these are used for rule generation)
+    with open(original_data_path+'/relation_entities.dt','wb') as f:
+        pickle.dump(background_relation, f)
+        f.close()
+    
+    # Save probability
+    with open(original_data_path+'/pro.dt','wb') as f:
+        pickle.dump(pro,f)
+        f.close()
+    with open(original_data_path+'/pro.txt', 'w') as f:
+        print(pro,file=f)
+        f.close()
+    
+    logging.info(f"Classifier complete: {len(all_relation_list)} background predicates, target arity: {target_arity}")
+    
+    return variable_objects, list(background_relation.keys()), background_relation, background_arity_relation, target_arity
+
 def get_all_object(): # This fun is made for country dataset 
     '''
     This function may be uncalled in the whole project. We may delete this function in the later. 
@@ -630,7 +857,22 @@ def main(dataset, t_relation = '', path_name = '' , original_data_path= '', vari
 
     relation_name = []
     variable_number = variable_depth + 2 
-    variable_objects, relation_name, relation , arity_relation, target_arity = classifier(original_data_path+t_relation +'.nl', variable_number, original_data_path+t_relation, t_relation)
+    
+    # Check if separate train.pl and facts.pl files exist
+    train_path = original_data_path + 'train.pl'
+    facts_path = original_data_path + 'facts.pl'
+    
+    if os.path.exists(train_path) and os.path.exists(facts_path):
+        # Use new classifier that separates background knowledge from target edges
+        logging.info('Found train.pl and facts.pl - using separate file loading')
+        variable_objects, relation_name, relation , arity_relation, target_arity = classifier_with_separate_files(
+            facts_path, train_path, variable_number, original_data_path+t_relation, t_relation)
+    else:
+        # Fall back to original single-file classifier
+        logging.info('Using original single-file loading from .nl file')
+        variable_objects, relation_name, relation , arity_relation, target_arity = classifier(
+            original_data_path+t_relation +'.nl', variable_number, original_data_path+t_relation, t_relation)
+    
     logging.info('Begin generating data with %s as head predicate.'%t_relation)
 
     # Assemb all the countries 

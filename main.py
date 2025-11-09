@@ -89,6 +89,7 @@ def set_parser():
                         help="The focus mode on, the model explore only the target predicate.", type=int, default = 0)
     parser.add_argument('-bap', '--bap', help="Use focus mode on and generate all logic program. This manner generate LPs in bottom up manner.", type=int, default = 0)
     parser.add_argument('-sodche', '--sodnesschecker', help="check the soundness of all LPs on whole datasets.", type=int, default = 0)
+    parser.add_argument('-output_rules', '--output_rules', help="Output filename for learned rules (default: best.pl)", type=str, default = 'best.pl')
 
     args = parser.parse_args()
     print('ARGS:', args)
@@ -138,7 +139,7 @@ def set_logger(args, project_folder="deepDFOL"):
     return 0
 
 
-def curriculum_learning(dataset, predicate,learning_rate=0.001, alpha = 10, variable_depth = 1, lar = False, bs = 64, verbose = 2, final_threshold = 0.3, sample_walk = False, learning_times = 5):
+def curriculum_learning(dataset, predicate,learning_rate=0.001, alpha = 10, variable_depth = 1, lar = False, bs = 64, verbose = 2, final_threshold = 0.3, sample_walk = False, learning_times = 5, output_rules = 'best.pl'):
     ini_alpha = alpha
     time_train = 0
     while time_train < learning_times:
@@ -152,7 +153,7 @@ def curriculum_learning(dataset, predicate,learning_rate=0.001, alpha = 10, vari
         # Do extract and save the best parameters 
         head_pre = meta_info["head_pre"]
         target_arity = meta_info["target_arity"]
-        acc = get_best_logic_programs(dataset,predicate,head_pre,target_arity,variable_depth, final_threshold=final_threshold, sample_walk = sample_walk)
+        acc = get_best_logic_programs(dataset,predicate,head_pre,target_arity,variable_depth, final_threshold=final_threshold, sample_walk = sample_walk, output_rules = output_rules)
         if acc == -2:
             ini_alpha = int(ini_alpha/1.2)
             continue
@@ -309,6 +310,7 @@ def main(args):
     check_test = bool(1- args.checktrain)
     bottom_up_ap = bool(args.bap)
     sound_checker = bool(args.sodnesschecker)
+    output_rules = args.output_rules
     # if ete == True:
         # lar = True
 
@@ -363,7 +365,7 @@ def main(args):
 
 
     if cur == True:
-        curriculum_learning(d,p,learning_rate, alpha ,variable_depth, lar, bs, verbose, final_threshold, sample_walk_check)
+        curriculum_learning(d,p,learning_rate, alpha ,variable_depth, lar, bs, verbose, final_threshold, sample_walk_check, output_rules=output_rules)
         logging.info("Finish Training.")
         
     if ap == True:
