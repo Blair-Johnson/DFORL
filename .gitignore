@@ -1,3 +1,6 @@
 length/result/length/model/saved_model.pb
 *.pb
 *.dt 
+__pycache__/
+*.pyc
+*.pyo
