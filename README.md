@@ -3,6 +3,14 @@
 
 DFOL is a software that learns first-order logic programs from larger knowledge graphs such as FB15K-Selected， WordNet, and smaller inductive logic programming (ILP) datasets. The corresponding academic publications appear in @[AIJ](https://www.sciencedirect.com/science/article/abs/pii/S0004370224000444). 
 
+## New Feature: Separate train.pl and facts.pl Files
+
+DFORL now supports loading data from two separate files to better control the learning process:
+- **facts.pl**: Background knowledge used for rule inference
+- **train.pl**: Target edges to learn definitions for
+
+This allows you to explicitly separate learning targets from background knowledge, ensuring that only predicates from facts.pl are used in rule bodies. See [SEPARATE_FILES_GUIDE.md](SEPARATE_FILES_GUIDE.md) for detailed documentation.
+
 ## Experimental Environments:
 
 The list shows the explicit software in the DFOL and the corresponding version. The versions in the parameter indicate the actual software versions used in the author's environment.
