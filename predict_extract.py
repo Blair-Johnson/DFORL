@@ -893,7 +893,7 @@ def calculate_accuracy_from_target(task_name, t_relation, all_test_mode = False)
 
 
 
-def get_best_logic_programs(task_name, t_relation,head_pre, t_arity, variable_depth = 1, final_threshold = 0.3, sample_walk = False):
+def get_best_logic_programs(task_name, t_relation,head_pre, t_arity, variable_depth = 1, final_threshold = 0.3, sample_walk = False, output_rules = 'best.pl'):
     '''
     Iterately compute the best logic program and return the best accuracy 
     '''
@@ -943,11 +943,11 @@ def get_best_logic_programs(task_name, t_relation,head_pre, t_arity, variable_de
     save_best_weights(task_name, correct_list ,weights, t_relation,correct_threshold) #! change threshold 
     
     # add the correct rule from template file into the best file 
-    build_best_logic_program(t_relation, task_name, correct_list, correct_threshold) #! change threshold 
+    build_best_logic_program(t_relation, task_name, correct_list, correct_threshold, best_rule_name=output_rules) #! change threshold 
     # reini the target predicate 
     build_target_predicate(t_relation=t_relation,task_name=task_name, sample_walk = sample_walk) 
     # compute and update the target predicate state through the check function 
-    correct_list = check_accuracy_of_logic_program(task_name,data_path,t_relation,result_path, 'best.pl',all_relation = all_relation,t_arity=t_arity,sample_walk = sample_walk)
+    correct_list = check_accuracy_of_logic_program(task_name,data_path,t_relation,result_path, output_rules,all_relation = all_relation,t_arity=t_arity,sample_walk = sample_walk)
     # compute the accuracy based on the target predicates 
     target_pre_acc = calculate_accuracy_from_target(task_name, t_relation)
     logging.info("The accuracy from training target predicate")
