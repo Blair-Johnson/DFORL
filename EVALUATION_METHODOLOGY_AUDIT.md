@@ -9,13 +9,31 @@
 
 ## Executive Summary
 
-This report provides a detailed audit of the evaluation methodology used by the DFORL system for computing link prediction metrics (MRR and Hits@k). The evaluation follows a **filtered ranking protocol** where:
+This report provides a detailed audit of the evaluation methodology used by the DFORL system for computing link prediction metrics (MRR and Hits@k). 
+
+**⚠️ CRITICAL FINDING: A significant bug in the ranking algorithm artificially inflates all evaluation metrics.**
+
+The evaluation follows a **filtered ranking protocol** where:
 
 - **Test facts** are explicitly marked with `#TEST` tags in the data files
 - **Ranking** is performed by generating all possible candidate entity substitutions
 - **Filtering** removes facts that appear anywhere in the dataset (train + test)
 - **Ties** are handled by assigning the same rank to predictions with equal probabilities
 - **Both head and tail prediction** tasks are evaluated for each test fact
+
+### Critical Bug Summary
+
+**Location:** `predict_extract_last_version.py`, line 958
+
+**Issue:** When transitioning between score levels, the rank increments by only 1 instead of accounting for all items in the previous tie groups. This causes the positive prediction to receive an artificially good rank.
+
+**Impact Example:**
+- Positive score: 0.8, Negative scores: [0.95, 0.95, 0.95, 0.9]
+- **Buggy rank:** 3 → MRR = 0.333, Hits@3 = YES
+- **Correct rank:** 5 → MRR = 0.200, Hits@3 = NO
+- **Metric inflation:** 66% for MRR, incorrect for Hits@3
+
+**Consequence:** All reported metrics are inflated and not comparable to standard implementations. Results require correction before comparison with baseline methods.
 
 ---
 
@@ -310,29 +328,46 @@ while index < len(list_symbolic)-1:
     elif list_symbolic[index][1] <= list_symbolic[index+1][1]:
         symbolic_rank[index_sym].append(ini_rank)  # Same rank if same probability
     else:
-        ini_rank += 1  # Increment rank
+        ini_rank += 1  # Increment rank (BUG: should be index + 2)
         symbolic_rank[index_sym].append(ini_rank)
     index += 1
 ```
 
+**⚠️ CRITICAL BUG IDENTIFIED:**
+
+The ranking algorithm contains a **significant bug** at line 958. When transitioning from one score to the next, the rank only increments by 1 (`ini_rank += 1`), regardless of how many candidates were in the previous tie group. This causes **incorrect ranking** that unfairly benefits the target prediction.
+
+**Example of the bug:**
+- Scores: [0.95, 0.95, 0.95, 0.9, 0.8, 0.8, 0.8] (positive is at 0.8)
+- **Buggy ranks:** [1, 1, 1, 2, 3, 3, 3] → Positive gets rank 3
+- **Correct ranks:** [1, 1, 1, 4, 5, 5, 5] → Positive should get rank 5
+
+**Impact:** The positive prediction is penalized for only 2 negatives (those with strictly higher scores in previous groups) instead of all 4 negatives that outscored it. This artificially inflates MRR and Hits@k metrics.
+
 **Key Properties:**
 1. **Descending order:** Higher probabilities get better (lower) ranks
 2. **Rank 1** is the best rank
-3. **Ties:** Candidates with identical probabilities receive the same rank
+3. **Ties:** Candidates with identical probabilities receive the same rank (BUGGY)
 4. **Zero probabilities:** Assigned a very large rank (1e8 ≈ 100,000,000)
-5. **Rank progression:** After a tie, the next different score gets the next sequential rank (no rank skipping)
+5. **Rank progression:** ⚠️ **BUGGY** - After a tie, rank only increments by 1 instead of accounting for all items in the tie group
 
 ### 6.3 Example Rank Assignment
 
 Consider candidates with probabilities: [0.9, 0.7, 0.7, 0.5, 0.0, 0.0]
 
-**Ranks assigned:**
+**Ranks assigned by BUGGY implementation:**
 - Probability 0.9 → Rank 1
 - Probability 0.7 → Rank 2 (both candidates)
 - Probability 0.5 → Rank 3
 - Probability 0.0 → Rank 1e8 (both candidates)
 
-**Note:** This is an **optimistic ranking** where ties receive the better rank.
+**Correct ranks (optimistic or pessimistic):**
+- Probability 0.9 → Rank 1
+- Probability 0.7 → Rank 2 (optimistic) or Ranks 2-3 (pessimistic)
+- Probability 0.5 → Rank 4
+- Probability 0.0 → Rank 1e8 (both candidates)
+
+**⚠️ Note:** The current implementation claims to use "optimistic ranking" but is actually **incorrectly implemented**. The rank does not properly account for all items in tie groups when transitioning to the next score level.
 
 ---
 
@@ -350,16 +385,33 @@ elif list_symbolic[index][1] <= list_symbolic[index+1][1]:
 
 ### 7.2 Tie Resolution Strategy
 
-**Strategy:** **Optimistic ranking** (assign the best possible rank)
+**⚠️ CRITICAL: The tie handling is INCORRECTLY implemented**
 
-When multiple candidates share the same probability:
-- All tied candidates receive the **same rank**
-- The rank assigned is the **better (lower) rank**
-- After the tie group, ranking continues sequentially without skipping
+The code **claims** to implement optimistic ranking, but the implementation is **buggy**.
 
-**Implications:**
-- If the target fact ties with others, it gets the benefit of the best rank in that group
-- This is the **filtered setting with optimistic tie handling**
+**What optimistic ranking should do:**
+- All tied candidates receive the **same (best) rank** within their group ✓ (Correctly implemented)
+- The next score level receives a rank equal to its position (number of preceding items + 1) ✗ (INCORRECTLY implemented)
+
+**What the buggy implementation does:**
+- All tied candidates receive the same rank ✓
+- The next score level receives the previous rank + 1 (regardless of tie group size) ✗
+
+**Concrete Example:**
+- Scores: [0.95, 0.95, 0.95, 0.9, 0.8] (positive at 0.8)
+- **Buggy implementation:**
+  - 0.95 scores: rank 1 (correct)
+  - 0.9 score: rank 2 (WRONG - should be rank 4)
+  - 0.8 score: rank 3 (WRONG - should be rank 5)
+- **Correct implementation (optimistic or pessimistic):**
+  - 0.95 scores: rank 1 (all three get rank 1 in optimistic)
+  - 0.9 score: rank 4 (because 3 items precede it)
+  - 0.8 score: rank 5 (because 4 items precede it)
+
+**Impact:**
+- The positive prediction receives an **artificially low (better) rank**
+- It is only penalized for the number of distinct score levels above it, not the actual number of items
+- This leads to **inflated MRR and Hits@k values**
 
 ### 7.3 Special Case: Zero Probabilities
 
@@ -744,7 +796,7 @@ When comparing DFORL results with other methods, consider:
 |------------|-------------------|
 | **Metric Computation** | MRR = mean reciprocal rank; Hits@k = proportion in top-k |
 | **Ranking Protocol** | Filtered (removes train + test facts) |
-| **Tie Handling** | Optimistic (tied items get best rank) |
+| **Tie Handling** | ⚠️ **BUGGY** - Claims optimistic but incorrectly implemented |
 | **Evaluation Scope** | Both head and tail prediction |
 | **Test Set** | Facts marked with #TEST (~10% of data) |
 | **Entity Universe** | All entities in dataset (train + test) |
@@ -753,44 +805,116 @@ When comparing DFORL results with other methods, consider:
 | **Scoring Method** | Logic rule probabilities (discrete) |
 | **Zero Probability** | Rank = 1e8 (effectively unranked) |
 
-### 15.2 Alignment with Standard Practices
+### 15.2 Critical Bug Identified
+
+**⚠️ RANKING BUG:** The ranking algorithm at `predict_extract_last_version.py:958` contains a critical bug that artificially inflates evaluation metrics.
+
+**The Issue:**
+- When transitioning from one score level to the next, rank only increments by 1
+- Should increment by the number of items in all preceding groups
+- This gives the positive prediction an unfairly good rank
+
+**Example Impact:**
+- Scenario: Positive has score 0.8, negatives have scores [0.95, 0.95, 0.95, 0.9]
+- **Buggy rank:** 3 (only 2 distinct score levels above)
+- **Correct rank:** 5 (4 actual items above)
+- **MRR impact:** Buggy = 0.333, Correct = 0.200 (66% inflation!)
+- **Hits@3 impact:** Buggy = Yes (rank 3 ≤ 3), Correct = No (rank 5 > 3)
+
+**Consequence:** All reported MRR and Hits@k values are **artificially inflated** and **not comparable** to standard implementations.
+
+### 15.3 Alignment with Standard Practices
 
 ✅ **Consistent:** Filtered ranking protocol  
-✅ **Consistent:** MRR and Hits@k metrics  
+✅ **Consistent:** MRR and Hits@k metrics (formulas)  
 ✅ **Consistent:** Bidirectional evaluation  
 ✅ **Consistent:** Complete entity candidate set  
+❌ **INCONSISTENT:** Ranking algorithm is buggy - inflates metrics  
 ⚠️ **Note:** Transductive setting (test facts in database)  
 ⚠️ **Note:** Discrete scoring may increase ties  
 
-### 15.3 Recommendations for Fair Comparison
+### 15.4 Recommendations for Fair Comparison
+
+**⚠️ IMPORTANT:** Due to the ranking bug, DFORL's reported metrics **cannot be directly compared** to standard implementations without correction.
 
 When comparing DFORL with other methods:
 
-1. **Verify evaluation setting:**
+1. **Fix the ranking bug first:**
+   - Correct line 958 in `predict_extract_last_version.py`
+   - Change `ini_rank += 1` to `ini_rank = index + 2`
+   - Re-run all evaluations to get corrected metrics
+
+2. **Verify evaluation setting:**
    - Ensure baselines use filtered ranking
    - Confirm transductive vs. inductive setting
    - Check if test facts are in database
 
-2. **Check data partitioning:**
+3. **Check data partitioning:**
    - Use same train/test split
    - Verify #TEST markers are consistently used
    - Confirm same entity universe
 
-3. **Validate metrics:**
+4. **Validate metrics:**
    - Ensure same MRR formula (including tie handling)
    - Confirm Hits@k uses same k values [1, 3, 10]
    - Verify both directions evaluated
+   - **Critically:** Verify ranking algorithm correctness
 
-4. **Document differences:**
+5. **Document differences:**
    - Note if scoring mechanisms differ
    - Report any variations in protocol
    - Clarify transductive/inductive setting
+   - **Disclose the ranking bug and its impact on published results**
 
 ---
 
-## 16. References
+## 16. How to Fix the Ranking Bug
 
-### 16.1 Code Files Analyzed
+### 16.1 The Problem
+
+The bug is at line 958 in `predict_extract_last_version.py`:
+
+```python
+else:
+    ini_rank += 1  # BUG: Only increments by 1
+    symbolic_rank[index_sym].append(ini_rank)
+```
+
+### 16.2 The Solution
+
+Replace line 958 with:
+
+```python
+else:
+    ini_rank = index + 2  # Correct: rank = position + 1 (1-indexed)
+    symbolic_rank[index_sym].append(ini_rank)
+```
+
+**Explanation:** The rank should be based on the current position in the sorted list (how many items came before), not on a simple counter that increments by 1.
+
+### 16.3 Verification
+
+After fixing, verify with this test case:
+- Scores: [0.95, 0.95, 0.95, 0.9, 0.8, 0.8, 0.8]
+- Expected ranks: [1, 1, 1, 4, 5, 5, 5]
+- Before fix: [1, 1, 1, 2, 3, 3, 3] ❌
+- After fix: [1, 1, 1, 4, 5, 5, 5] ✅
+
+### 16.4 Impact Assessment
+
+After fixing the bug:
+- **MRR values will decrease** (possibly significantly)
+- **Hits@k values will decrease** (especially for smaller k)
+- Results will align with standard evaluation protocols
+- Comparisons with baseline methods will be valid
+
+**Action Required:** Re-run all evaluations and update published results.
+
+---
+
+## 17. References
+
+### 17.1 Code Files Analyzed
 
 - `predict_extract_last_version.py` (primary evaluation code)
 - `predict_extract.py` (alternative/older version)
@@ -798,7 +922,7 @@ When comparing DFORL with other methods:
 - `data_generator.py` (data preparation)
 - `tools/choose_test_atoms.py` (test set creation utilities)
 
-### 16.2 Key Functions
+### 17.2 Key Functions
 
 - `check_MRR_Hits()` - Main evaluation function (line 884-1017)
 - `check_accuracy_of_logic_program()` - Scoring function (line 363-633)
@@ -806,7 +930,7 @@ When comparing DFORL with other methods:
 - `indicator_build()` - Filtering function (line 869-881)
 - `make_relation_entities()` - Data parsing (line 827-867)
 
-### 16.3 Related Publications
+### 17.3 Related Publications
 
 Based on README.md citations:
 - IJCAI 2022 paper: "Learning First-Order Rules with Differentiable Logic Program Semantics"
