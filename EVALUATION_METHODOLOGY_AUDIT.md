@@ -3,7 +3,8 @@
 
 **Report Date:** November 2025  
 **System Version:** Based on code analysis of the DFORL repository  
-**Primary Evaluation Code:** `predict_extract_last_version.py`, function `check_MRR_Hits()`
+**Primary Evaluation Code:** `predict_extract.py`, function `check_MRR_Hits()` (lines 1021-1165)  
+**Legacy Code (Not Used):** `predict_extract_last_version.py` uses `NLP/` paths instead of `deepDFOL/` paths
 
 ---
 
@@ -12,6 +13,8 @@
 This report provides a detailed audit of the evaluation methodology used by the DFORL system for computing link prediction metrics (MRR and Hits@k). 
 
 **⚠️ CRITICAL FINDING: A significant bug in the ranking algorithm artificially inflates all evaluation metrics.**
+
+**⚠️ IMPORTANT: The bug exists in BOTH `predict_extract.py` (currently used) AND `predict_extract_last_version.py` (legacy). The currently active version is `predict_extract.py` which is imported by `main.py`.**
 
 The evaluation follows a **filtered ranking protocol** where:
 
@@ -23,7 +26,9 @@ The evaluation follows a **filtered ranking protocol** where:
 
 ### Critical Bug Summary
 
-**Location:** `predict_extract_last_version.py`, line 958
+**Locations:** 
+- `predict_extract.py`, line 1113 (CURRENTLY USED)
+- `predict_extract_last_version.py`, line 958 (legacy, not used)
 
 **Issue:** When transitioning between score levels, the rank increments by only 1 instead of accounting for all items in the previous tie groups. This causes the positive prediction to receive an artificially good rank.
 
@@ -34,6 +39,60 @@ The evaluation follows a **filtered ranking protocol** where:
 - **Metric inflation:** 66% for MRR, incorrect for Hits@3
 
 **Consequence:** All reported metrics are inflated and not comparable to standard implementations. Results require correction before comparison with baseline methods.
+
+---
+
+## 0. Code Version Information
+
+### 0.1 Which Version is Used?
+
+**Active Version:** `predict_extract.py` (imported by `main.py` line 21)
+
+```python
+# From main.py:
+from predict_extract import check_MRR_Hits, get_best_logic_programs, ...
+```
+
+**Legacy Version:** `predict_extract_last_version.py` (NOT used, kept for archival purposes)
+
+### 0.2 Key Differences Between Versions
+
+| Aspect | `predict_extract.py` (Active) | `predict_extract_last_version.py` (Legacy) |
+|--------|------------------------------|-------------------------------------------|
+| **Path prefix** | `deepDFOL/` | `NLP/` |
+| **File size** | 1,380 lines | 1,229 lines |
+| **Ranking bug location** | Line 1113 | Line 958 |
+| **Ranking implementation** | `tem_correct_rank += 1` | `ini_rank += 1` |
+| **Bug behavior** | **Same bug** - both incorrect | **Same bug** - both incorrect |
+
+### 0.3 Ranking Bug in Both Versions
+
+**In `predict_extract.py` (lines 1112-1118):**
+```python
+for all_corupt_pro in test_pro:
+    if all_corupt_pro[1] < the_last_pro:
+        tem_correct_rank += 1  # BUG: only increments by 1
+        the_last_pro = all_corupt_pro[1]
+    if all_corupt_pro[0] == (target_fact[0], target_fact[1]):
+        correct_rank = tem_correct_rank
+        break
+```
+
+**In `predict_extract_last_version.py` (lines 951-960):**
+```python
+while index < len(list_symbolic)-1:
+    index_sym = list_symbolic[index+1][0]
+    if list_symbolic[index+1][1] == 0:
+        symbolic_rank[index_sym].append(1e8)
+    elif list_symbolic[index][1] <= list_symbolic[index+1][1]:
+        symbolic_rank[index_sym].append(ini_rank)
+    else:
+        ini_rank += 1  # BUG: only increments by 1
+        symbolic_rank[index_sym].append(ini_rank)
+    index += 1
+```
+
+**Both produce the same incorrect ranking behavior.**
 
 ---
 
@@ -304,9 +363,27 @@ list_symbolic.sort(key=lambda tup: tup[1],reverse=True)  # Sort descending
 
 ### 6.2 Rank Assignment Algorithm
 
+**⚠️ NOTE:** The bug exists in BOTH the active (`predict_extract.py`) and legacy (`predict_extract_last_version.py`) versions. Code references below show both implementations.
+
 The system assigns ranks with special handling for ties and zero probabilities:
 
-**Implementation (predict_extract_last_version.py:941-960):**
+**Implementation in `predict_extract.py` (ACTIVE, lines 1107-1118):**
+```python
+test_pro.sort(key = lambda x: x[1], reverse = True)  # Sort descending
+
+the_last_pro = 1e8
+correct_rank = 1e8
+tem_correct_rank = 0
+for all_corupt_pro in test_pro:
+    if all_corupt_pro[1] < the_last_pro:
+        tem_correct_rank += 1  # BUG: Only increments by 1!
+        the_last_pro = all_corupt_pro[1]
+    if all_corupt_pro[0] == (target_fact[0], target_fact[1]):
+        correct_rank = tem_correct_rank
+        break
+```
+
+**Implementation in `predict_extract_last_version.py` (legacy, lines 941-960):**
 ```python
 if list_symbolic[0][1] == 0:
     ini_rank = 1e8  # Very large rank if top prediction has 0 probability
@@ -328,14 +405,14 @@ while index < len(list_symbolic)-1:
     elif list_symbolic[index][1] <= list_symbolic[index+1][1]:
         symbolic_rank[index_sym].append(ini_rank)  # Same rank if same probability
     else:
-        ini_rank += 1  # Increment rank (BUG: should be index + 2)
+        ini_rank += 1  # BUG: Only increments by 1!
         symbolic_rank[index_sym].append(ini_rank)
     index += 1
 ```
 
 **⚠️ CRITICAL BUG IDENTIFIED:**
 
-The ranking algorithm contains a **significant bug** at line 958. When transitioning from one score to the next, the rank only increments by 1 (`ini_rank += 1`), regardless of how many candidates were in the previous tie group. This causes **incorrect ranking** that unfairly benefits the target prediction.
+The ranking algorithm contains a **significant bug** in both versions. When transitioning from one score to the next, the rank only increments by 1, regardless of how many candidates were in the previous tie group. This causes **incorrect ranking** that unfairly benefits the target prediction.
 
 **Example of the bug:**
 - Scores: [0.95, 0.95, 0.95, 0.9, 0.8, 0.8, 0.8] (positive is at 0.8)
@@ -872,8 +949,17 @@ When comparing DFORL with other methods:
 
 ### 16.1 The Problem
 
-The bug is at line 958 in `predict_extract_last_version.py`:
+The bug exists in **BOTH** versions:
 
+**In `predict_extract.py` (CURRENTLY USED), line 1113:**
+```python
+for all_corupt_pro in test_pro:
+    if all_corupt_pro[1] < the_last_pro:
+        tem_correct_rank += 1  # BUG: Only increments by 1
+        the_last_pro = all_corupt_pro[1]
+```
+
+**In `predict_extract_last_version.py` (legacy), line 958:**
 ```python
 else:
     ini_rank += 1  # BUG: Only increments by 1
@@ -882,11 +968,26 @@ else:
 
 ### 16.2 The Solution
 
-Replace line 958 with:
+**For `predict_extract.py` (lines 1109-1118), replace with:**
+
+```python
+the_last_pro = 1e8
+correct_rank = 1e8
+tem_correct_rank = 0
+for idx, all_corupt_pro in enumerate(test_pro):
+    if all_corupt_pro[1] < the_last_pro:
+        tem_correct_rank = idx + 1  # FIX: rank = position + 1
+        the_last_pro = all_corupt_pro[1]
+    if all_corupt_pro[0] == (target_fact[0], target_fact[1]):
+        correct_rank = tem_correct_rank
+        break
+```
+
+**For `predict_extract_last_version.py` (line 958), replace with:**
 
 ```python
 else:
-    ini_rank = index + 2  # Correct: rank = position + 1 (1-indexed)
+    ini_rank = index + 2  # FIX: rank = position + 1 (1-indexed)
     symbolic_rank[index_sym].append(ini_rank)
 ```
 
@@ -916,8 +1017,8 @@ After fixing the bug:
 
 ### 17.1 Code Files Analyzed
 
-- `predict_extract_last_version.py` (primary evaluation code)
-- `predict_extract.py` (alternative/older version)
+- `predict_extract.py` (CURRENTLY USED - imported by main.py)
+- `predict_extract_last_version.py` (legacy code, not used - uses NLP/ paths)
 - `main.py` (entry point and argument parsing)
 - `data_generator.py` (data preparation)
 - `tools/choose_test_atoms.py` (test set creation utilities)
